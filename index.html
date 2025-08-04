@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tokenomics Demo</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const App = () => {
+      const [scenario, setScenario] = useState('');
+      const [status, setStatus] = useState('');
+      const [model, setModel] = useState(null);
+      const [scaler, setScaler] = useState(null);
+      const [contractState, setContractState] = useState({
+        tokenPriceUSD: '0',
+        activeUsers: '0',
+        fiatAmount: '0',
+        subscriptionPricePLT: '0',
+        reserveBalance: '0',
+        predictedAction: '',
+        actionName: ''
+      });
+
+      // Pre-deployed contract addresses (from deployed.json)
+      const TOKEN_ADDRESS = '0x123...'; // Replace with AICoinToken address
+      const SUBSCRIPTION_ADDRESS = '0x456...'; // Replace with SubscriptionManager address
+      const EXCHANGE_ADDRESS = '0x789...'; // Replace with exchange address
+      const OWNER_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Replace with owner address
+
+      // Action definitions from Classify_action.py
+      const ACTION_MAP = {
+        0: "No Action",
+        1: "Lower Subscription Price",
+        2: "Raise Subscription Price",
+        3: "Take Profits (Sell 10% of Reserve)",
+        4: "Price Support (Buy-Back)",
+        5: "Take Profits (Sell 20% of Reserve)"
+      };
+
+      // Contract ABI
+      const SUBSCRIPTION_ABI = [
+        "function simulateUserDrop(uint256 _usersToDrop) external",
+        "function simulateUserIncrease(uint256 _usersToAdd) external",
+        "function applyCorrectiveAction(uint256 action) external",
+        "function tokenPriceUSD() view returns (uint256)",
+        "function lastTokenPrice() view returns (uint256)",
+        "function subscriptionPricePLT() view returns (uint256)",
+        "function activeUsers() view returns (uint256)",
+        "function lastActiveUsers() view returns (uint256)",
+        "function fiatAmount() view returns (uint256)",
+        "function tokenAmount() view returns (uint256)",
+        "function reserveBalance() view returns (uint256)",
+        "function discountActive() view returns (bool)",
+        "function discountEndBlock() view returns (uint256)",
+        "function setFiatAmount(uint256 _fiatAmount) external",
+        "function setLastTokenPrice(uint256 _lastTokenPrice) external",
+        "event PriceUpdated(uint256 newPriceUSD, uint256 oldPriceUSD)",
+        "event PriceAdjusted(uint256 newPricePLT, uint256 oldPricePLT, string reason)",
+        "event UserCountUpdated(uint256 newUserCount, uint256 oldUserCount)",
+        "event TokensSold(uint256 amount, uint256 newPriceUSD)",
+        "event TokensBought(uint256 amount, uint256 newPriceUSD)",
+        "event DiscountToggled(bool active, uint256 endBlock)",
+        "event EmptyLastPrice(uint256 lastTokenPrice)",
+        "event DebugAdjustPrice(uint256 priceChangePercent, uint256 userChangePercent, uint256 tokenPriceUSD, uint256 lastTokenPrice, bool conditionsMet)"
+      ];
+
+      const TOKEN_ABI = [
+        "function approve(address spender, uint256 amount) external returns (bool)",
+        "function transfer(address to, uint256 amount) external returns (bool)",
+        "function grantRole(bytes32 role, address account) external"
+      ];
+
+      // Scenarios from main_script.js
+      const scenarios = [
+        { name: "Month 1: Stable Launch", userChange: 0.05, priceChange: 0.03 },
+        { name: "Month 2: Early Adoption", userChange: 0.10, priceChange: 0.08 },
+        { name: "Month 3: Market Correction", userChange: -0.10, priceChange: -0.15 },
+        { name: "Month 4: Recovery Phase", userChange: 0.08, priceChange: 0.10 },
+        { name: "Month 5: Steady Growth", userChange: 0.12, priceChange: 0.07 },
+        { name: "Month 6: Bullish Surge", userChange: 0.18, priceChange: 0.15 },
+        { name: "Month 7: Sharp Decline", userChange: -0.15, priceChange: -0.20 },
+        { name: "Month 8: Stabilization", userChange: 0.05, priceChange: 0.04 },
+        { name: "Month 9: Renewed Uptick", userChange: 0.15, priceChange: 0.12 },
+        { name: "Month 10: Peak Momentum", userChange: 0.20, priceChange: 0.18 },
+        { name: "Month 11: Profit Taking", userChange: -0.08, priceChange: -0.12 },
+        { name: "Month 12: Strong Bull Run", userChange: 0.25, priceChange: 0.20 }
+      ];
+
+      // Format functions
+      const formatUSD = (bn) => Number(ethers.utils.formatUnits(bn, 8)).toFixed(2);
+      const formatPLT = (bn) => Number(ethers.utils.formatUnits(bn, 18)).toFixed(2);
+
+      // Load neural network model and scaler
+      useEffect(() => {
+        async function loadModelAndScaler() {
+          try {
+            const model = await tf.loadLayersModel('/tfjs_model/model.json');
+            const scalerResponse = await fetch('/scaler.json');
+            const scalerData = await scalerResponse.json();
+            setModel(model);
+            setScaler(scalerData);
+            setStatus('Model and scaler loaded');
+          } catch (error) {
+            setStatus(`Error loading model or scaler: ${error.message}`);
+          }
+        }
+        loadModelAndScaler();
+      }, []);
+
+      // Predict action (ported from Classify_action.py)
+      const predictAction = async (inputData) => {
+        if (!model || !scaler) {
+          return { predicted_action: 0, action_name: "No Action" };
+        }
+        try {
+          const [lastUsers, prevUsers, latestPriceChange, prevPriceChange, fiatAmount, tokenAmount, reserveBalance] = inputData;
+          const features = tf.tensor2d([[lastUsers, prevUsers, latestPriceChange, prevPriceChange, fiatAmount, tokenAmount, reserveBalance]], [1, 7], 'float32');
+          const mean = tf.tensor1d(scaler.mean, 'float32');
+          const scale = tf.tensor1d(scaler.scale, 'float32');
+          const featuresScaled = features.sub(mean).div(scale);
+          const prediction = model.predict(featuresScaled);
+          const predictedAction = prediction.argMax(-1).dataSync()[0];
+          features.dispose();
+          featuresScaled.dispose();
+          prediction.dispose();
+          return {
+            predicted_action: predictedAction,
+            action_name: ACTION_MAP[predictedAction] || "Unknown Action"
+          };
+        } catch (error) {
+          console.error('Prediction error:', error);
+          return { predicted_action: 0, action_name: "No Action" };
+        }
+      };
+
+      // Fetch contract state
+      const fetchContractState = async () => {
+        if (!window.ethereum) {
+          setStatus('Please install MetaMask');
+          return;
+        }
+        try {
+          const provider = new ethers.providers.Web3Provider(window.ethereum);
+          const subscription = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, provider);
+          const tokenPriceUSD = await subscription.tokenPriceUSD();
+          const activeUsers = await subscription.activeUsers();
+          const fiatAmount = await subscription.fiatAmount();
+          const subscriptionPricePLT = await subscription.subscriptionPricePLT();
+          const reserveBalance = await subscription.reserveBalance();
+          setContractState((prev) => ({
+            ...prev,
+            tokenPriceUSD: formatUSD(tokenPriceUSD),
+            activeUsers: activeUsers.toString(),
+            fiatAmount: formatUSD(fiatAmount),
+            subscriptionPricePLT: formatPLT(subscriptionPricePLT),
+            reserveBalance: formatPLT(reserveBalance)
+          }));
+        } catch (error) {
+          setStatus(`Error fetching state: ${error.message}`);
+        }
+      };
+
+      // Simulate scenario
+      const runScenario = async () => {
+        if (!scenario) {
+          setStatus('Please select a scenario');
+          return;
+        }
+        if (!window.ethereum) {
+          setStatus('Please install MetaMask');
+          return;
+        }
+        if (!model || !scaler) {
+          setStatus('Model or scaler not loaded');
+          return;
+        }
+        try {
+          const provider = new ethers.providers.Web3Provider(window.ethereum);
+          await provider.send("eth_requestAccounts", []);
+          const signer = provider.getSigner();
+          const subscription = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, signer);
+          const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
+
+          const selectedScenario = scenarios.find(s => s.name === scenario);
+          setStatus(`Running ${selectedScenario.name}...`);
+
+          // Simulate price change
+          const currentTokenAmount = await subscription.tokenAmount();
+          const currentPriceUSD = await subscription.tokenPriceUSD();
+          const targetPriceUSD = currentPriceUSD.mul(Math.round((1 + selectedScenario.priceChange) * 100)).div(100);
+          const newFiatAmount = targetPriceUSD.mul(currentTokenAmount).div(ethers.utils.parseUnits("1", 18));
+          await subscription.setLastTokenPrice(currentPriceUSD);
+          await subscription.setFiatAmount(newFiatAmount);
+
+          // Simulate user change
+          const currentUsers = Number(await subscription.activeUsers());
+          const targetUsers = Math.max(10, Math.round(currentUsers * (1 + selectedScenario.userChange)));
+          const userChange = targetUsers - currentUsers;
+          if (userChange < 0) {
+            await subscription.simulateUserDrop(Math.abs(userChange));
+          } else if (userChange > 0) {
+            await subscription.simulateUserIncrease(userChange);
+          }
+
+          // Fetch updated state for neural network
+          const updatedUsers = Number(await subscription.activeUsers());
+          const prevUsers = Number(await subscription.lastActiveUsers());
+          const lastTokenPrice = await subscription.lastTokenPrice();
+          const fiatAmount = await subscription.fiatAmount();
+          const tokenAmount = await subscription.tokenAmount();
+          const reserveBalance = await subscription.reserveBalance();
+
+          // Predict action using TensorFlow.js
+          const inputData = [
+            updatedUsers,
+            prevUsers,
+            selectedScenario.priceChange,
+            0,
+            Number(ethers.utils.formatUnits(fiatAmount, 8)),
+            Number(ethers.utils.formatUnits(tokenAmount, 18)),
+            Number(ethers.utils.formatUnits(reserveBalance, 18))
+          ];
+          const { predicted_action, action_name } = await predictAction(inputData);
+          setContractState((prev) => ({
+            ...prev,
+            predictedAction: predicted_action,
+            actionName: action_name
+          }));
+
+          // Approve tokens for buy-back (action 4)
+          if (predicted_action === 4) {
+            await token.approve(SUBSCRIPTION_ADDRESS, ethers.utils.parseUnits("2000", 18));
+          }
+
+          // Apply corrective action
+          const actionTx = await subscription.applyCorrectiveAction(predicted_action);
+          await actionTx.wait();
+
+          // Update contract state
+          await fetchContractState();
+          setStatus(`Scenario ${selectedScenario.name} completed: Action ${action_name}`);
+        } catch (error) {
+          setStatus(`Error: ${error.message}`);
+        }
+      };
+
+      useEffect(() => {
+        fetchContractState();
+      }, []);
+
+      return (
+        <div className="p-4 max-w-2xl mx-auto">
+          <h1 className="text-2xl font-bold mb-4">Tokenomics Demo</h1>
+          <p className="mb-2">Token Address: {TOKEN_ADDRESS}</p>
+          <p className="mb-2">SubscriptionManager Address: {SUBSCRIPTION_ADDRESS}</p>
+          <p className="mb-2">Owner Address: {OWNER_ADDRESS}</p>
+          <div className="mb-4">
+            <label className="block mb-2">Select Scenario:</label>
+            <select
+              value={scenario}
+              onChange={(e) => setScenario(e.target.value)}
+              className="border p-2 w-full"
+            >
+              <option value="">Select a scenario</option>
+              {scenarios.map((s) => (
+                <option key={s.name} value={s.name}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <button
+            className="bg-blue-500 text-white p-2 rounded mb-4"
+            onClick={runScenario}
+          >
+            Run Scenario
+          </button>
+          <div className="mb-4">
+            <p>Token Price USD: ${contractState.tokenPriceUSD}</p>
+            <p>Active Users: {contractState.activeUsers}</p>
+            <p>Fiat Amount: ${contractState.fiatAmount}</p>
+            <p>Subscription Price PLT: {contractState.subscriptionPricePLT} PLT</p>
+            <p>Reserve Balance: {contractState.reserveBalance} PLT</p>
+            <p>Predicted Action: {contractState.actionName} ({contractState.predictedAction})</p>
+          </div>
+          <p className="text-red-500">{status}</p>
+          <a
+            href={`https://sepolia.etherscan.io/address/${SUBSCRIPTION_ADDRESS}`}
+            target="_blank"
+            className="text-blue-500 underline"
+          >
+            View on Sepolia Etherscan
+          </a>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
