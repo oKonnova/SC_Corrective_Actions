@@ -192,88 +192,80 @@
             };
 
             // --- CORE SIMULATION LOGIC ---
-            const runSingleScenario = async (provider, scenario, contractAddress, useAiAction) => {
-                const logPrefix = useAiAction ? "[AI]" : "[Control]";
-                const signer = provider.getSigner();
-                const subscription = new ethers.Contract(contractAddress, SUBSCRIPTION_ABI, signer);
-                const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
-
-                log(`${logPrefix} Running: ${scenario.name}`);
-
-                const initialPrice = await subscription.tokenPriceUSD();
-                const currentTokenAmount = await subscription.tokenAmount();
-
-                // Convert priceChange to BigInt-compatible format (scale by 10000 for 4 decimal precision)
-                const priceChangeScaled = BigInt(Math.round(scenario.priceChange * 10000));
-                const oneHundred = 10000n;
-                const targetPriceUSD = initialPrice * (10000n + priceChangeScaled) / oneHundred;
-                const newFiatAmount = (targetPriceUSD * currentTokenAmount) / (10n ** 18n);
-
-                let tx = await subscription.setLastTokenPrice(initialPrice);
-                await tx.wait();
-                tx = await subscription.setFiatAmount(newFiatAmount);
-                await tx.wait();
-
-                const currentUsers = await subscription.activeUsers();
-                const targetUsers = Math.max(10, Math.round(currentUsers.toNumber() * (1 + scenario.userChange)));
-                const userChange = targetUsers - currentUsers.toNumber();
-
-                if (userChange < 0) {
-                    tx = await subscription.simulateUserDrop(Math.abs(userChange));
-                } else if (userChange > 0) {
-                    tx = await subscription.simulateUserIncrease(userChange);
-                }
-                await tx.wait();
-
-                if (useAiAction) {
-                    const updatedUsers = (await subscription.activeUsers()).toNumber();
-                    const prevUsers = (await subscription.lastActiveUsers()).toNumber();
-                    const priceChange = scenario.priceChange;
-                    const prevPriceChange = 0;
-                    const fiatAmount = await subscription.fiatAmount();
-                    const tokenAmount = await subscription.tokenAmount();
-                    const reserveBalance = await subscription.reserveBalance();
-                    const tokenPriceUSD = await subscription.tokenPriceUSD();
-
-                    const userChangePercent = prevUsers > 0 ? ((updatedUsers - prevUsers) / prevUsers) * 100 : 0;
-                    // Commented out neural network prediction
-                    // const predictedAction = await getPredictedAction(
-                    //     updatedUsers,
-                    //     prevUsers,
-                    //     priceChange,
-                    //     prevPriceChange,
-                    //     fiatAmount.toString(),
-                    //     tokenAmount.toString(),
-                    //     reserveBalance.toString(),
-                    //     tokenPriceUSD.toString()
-                    // );
-                    const predictedAction = evaluateSubscriptionPrice(
-                        userChangePercent,
-                        priceChange,
-                        fiatAmount,
-                        reserveBalance,
-                        tokenPriceUSD,
-                        tokenAmount
-                    );
-
-                    log(`${logPrefix} 🧠 Predicted Action: ${ACTION_MAP[predictedAction]}`);
-
-                    if (predictedAction === 4) {
-                        log(`${logPrefix} Approving tokens for buy-back...`);
-                        const exchangeSigner = provider.getSigner(EXCHANGE_ADDRESS);
-                        tx = await token.connect(exchangeSigner).approve(contractAddress, ethers.parseUnits("20000", 18));
-                        await tx.wait();
-                    }
-
-                    tx = await subscription.applyCorrectiveAction(predictedAction);
+           const runSingleScenario = async (provider, scenario, contractAddress, useAiAction) => {
+            const logPrefix = useAiAction ? "[AI]" : "[Control]";
+            const signer = provider.getSigner();
+            const subscription = new ethers.Contract(contractAddress, SUBSCRIPTION_ABI, signer);
+            const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
+        
+            log(`${logPrefix} Running: ${scenario.name}`);
+        
+            const initialPrice = await subscription.tokenPriceUSD(); // BigInt
+            const currentTokenAmount = await subscription.tokenAmount(); // BigInt
+        
+            // Convert priceChange to BigInt-compatible format (scale by 10000 for 4 decimal precision)
+            const priceChangeScaled = BigInt(Math.round(scenario.priceChange * 10000));
+            const oneHundred = 10000n;
+            // Ensure all operations use BigInt
+            const targetPriceUSD = (initialPrice * (10000n + priceChangeScaled)) / oneHundred;
+            const newFiatAmount = (targetPriceUSD * currentTokenAmount) / (10n ** 18n);
+        
+            let tx = await subscription.setLastTokenPrice(initialPrice);
+            await tx.wait();
+            tx = await subscription.setFiatAmount(newFiatAmount);
+            await tx.wait();
+        
+            const currentUsers = await subscription.activeUsers(); // BigInt
+            // Convert BigInt to number for user calculations
+            const currentUsersNum = Number(currentUsers);
+            const targetUsers = Math.max(10, Math.round(currentUsersNum * (1 + scenario.userChange)));
+            const userChange = targetUsers - currentUsersNum;
+        
+            if (userChange < 0) {
+                tx = await subscription.simulateUserDrop(Math.abs(userChange));
+            } else if (userChange > 0) {
+                tx = await subscription.simulateUserIncrease(userChange);
+            }
+            await tx.wait();
+        
+            if (useAiAction) {
+                const updatedUsers = Number(await subscription.activeUsers()); // Convert BigInt to number
+                const prevUsers = Number(await subscription.lastActiveUsers()); // Convert BigInt to number
+                const priceChange = scenario.priceChange;
+                const prevPriceChange = 0;
+                const fiatAmount = await subscription.fiatAmount(); // BigInt
+                const tokenAmount = await subscription.tokenAmount(); // BigInt
+                const reserveBalance = await subscription.reserveBalance(); // BigInt
+                const tokenPriceUSD = await subscription.tokenPriceUSD(); // BigInt
+        
+                const userChangePercent = prevUsers > 0 ? ((updatedUsers - prevUsers) / prevUsers) * 100 : 0;
+                const predictedAction = evaluateSubscriptionPrice(
+                    userChangePercent,
+                    priceChange,
+                    fiatAmount,
+                    reserveBalance,
+                    tokenPriceUSD,
+                    tokenAmount
+                );
+        
+                log(`${logPrefix} Predicted Action: ${ACTION_MAP[predictedAction]}`);
+        
+                if (predictedAction === 4) {
+                    log(`${logPrefix} Approving tokens for buy-back...`);
+                    const exchangeSigner = provider.getSigner(EXCHANGE_ADDRESS);
+                    tx = await token.connect(exchangeSigner).approve(contractAddress, ethers.parseUnits("20000", 18));
                     await tx.wait();
-                    log(`${logPrefix} 🚀 Action applied on-chain.`);
                 }
-
-                const finalPrice = await subscription.tokenPriceUSD();
-                log(`${logPrefix} Final price for this step: $${ethers.formatUnits(finalPrice, 8)}`);
-                return parseFloat(ethers.formatUnits(finalPrice, 8));
-            };
+        
+                tx = await subscription.applyCorrectiveAction(predictedAction);
+                await tx.wait();
+                log(`${logPrefix} Action applied.`);
+            }
+        
+            const finalPrice = await subscription.tokenPriceUSD();
+            log(`${logPrefix} Final price for this step: $${ethers.formatUnits(finalPrice, 8)}`);
+            return parseFloat(ethers.formatUnits(finalPrice, 8));
+        };
 
             const handleRunAll = async () => {
                 if (!window.ethereum) return log("❌ MetaMask is not installed.");
