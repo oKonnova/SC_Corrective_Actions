@@ -198,7 +198,10 @@
                 const initialPrice = await subscription.tokenPriceUSD();
                 const currentTokenAmount = await subscription.tokenAmount();
 
-                const targetPriceUSD = initialPrice * BigInt(Math.round((1 + scenario.priceChange) * 100)) / 100n;
+                // Convert priceChange to BigInt-compatible format (scale by 10000 for 4 decimal precision)
+                const priceChangeScaled = BigInt(Math.round(scenario.priceChange * 10000));
+                const oneHundred = 10000n;
+                const targetPriceUSD = initialPrice * (10000n + priceChangeScaled) / oneHundred;
                 const newFiatAmount = (targetPriceUSD * currentTokenAmount) / (10n ** 18n);
 
                 let tx = await subscription.setLastTokenPrice(initialPrice);
