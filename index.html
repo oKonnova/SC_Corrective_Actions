@@ -1,309 +1,373 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tokenomics Demo</title>
-  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Tokenomics Live Demo</title>
+    <!-- React and ReactDOM -->
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <!-- Ethers.js for blockchain interaction -->
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Babel to transpile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- TensorFlow.js for the neural network -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <style>
+        /* Custom styles for a polished look */
+        body {
+            background-color: #f8fafc; /* A light gray background */
+            font-family: 'Inter', sans-serif;
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        .card {
+            background-color: white;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .btn {
+            transition: all 0.2s ease-in-out;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .status-log {
+            height: 200px;
+            background-color: #1a202c;
+            color: #a0aec0;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.875rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-y: scroll;
+        }
+    </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useEffect } = React;
+    <div id="root"></div>
 
-    const App = () => {
-      const [scenario, setScenario] = useState('');
-      const [status, setStatus] = useState('');
-      const [model, setModel] = useState(null);
-      const [scaler, setScaler] = useState(null);
-      const [contractState, setContractState] = useState({
-        tokenPriceUSD: '0',
-        activeUsers: '0',
-        fiatAmount: '0',
-        subscriptionPricePLT: '0',
-        reserveBalance: '0',
-        predictedAction: '',
-        actionName: ''
-      });
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
 
-      // Pre-deployed contract addresses (from deployed.json)
-      const TOKEN_ADDRESS = '0x123...'; // Replace with AICoinToken address
-      const SUBSCRIPTION_ADDRESS = '0x456...'; // Replace with SubscriptionManager address
-      const EXCHANGE_ADDRESS = '0x789...'; // Replace with exchange address
-      const OWNER_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Replace with owner address
+        const App = () => {
+            // --- STATE MANAGEMENT ---
+            const [isLoading, setIsLoading] = useState(true);
+            const [logs, setLogs] = useState(["Initializing..."]);
+            const [model, setModel] = useState(null);
+            const [scaler, setScaler] = useState(null);
+            const [chartData, setChartData] = useState(null);
+            const [chartInstance, setChartInstance] = useState(null);
+            const chartRef = useRef(null);
 
-      // Action definitions from Classify_action.py
-      const ACTION_MAP = {
-        0: "No Action",
-        1: "Lower Subscription Price",
-        2: "Raise Subscription Price",
-        3: "Take Profits (Sell 10% of Reserve)",
-        4: "Price Support (Buy-Back)",
-        5: "Take Profits (Sell 20% of Reserve)"
-      };
+            // --- CONFIGURATION (REPLACE WITH YOUR ACTUAL DATA) ---
+            // IMPORTANT: Replace these placeholder addresses with your actual deployed contract addresses.
+            const SUBSCRIPTION_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3'; // Your SubscriptionManager address
+            const TOKEN_ADDRESS = '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'; // Your SCPlusToken address
+            
+            // This should be the address of the exchange or account that can trigger the buy-back approval
+            const EXCHANGE_ADDRESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'; 
 
-      // Contract ABI
-      const SUBSCRIPTION_ABI = [
-        "function simulateUserDrop(uint256 _usersToDrop) external",
-        "function simulateUserIncrease(uint256 _usersToAdd) external",
-        "function applyCorrectiveAction(uint256 action) external",
-        "function tokenPriceUSD() view returns (uint256)",
-        "function lastTokenPrice() view returns (uint256)",
-        "function subscriptionPricePLT() view returns (uint256)",
-        "function activeUsers() view returns (uint256)",
-        "function lastActiveUsers() view returns (uint256)",
-        "function fiatAmount() view returns (uint256)",
-        "function tokenAmount() view returns (uint256)",
-        "function reserveBalance() view returns (uint256)",
-        "function discountActive() view returns (bool)",
-        "function discountEndBlock() view returns (uint256)",
-        "function setFiatAmount(uint256 _fiatAmount) external",
-        "function setLastTokenPrice(uint256 _lastTokenPrice) external",
-        "event PriceUpdated(uint256 newPriceUSD, uint256 oldPriceUSD)",
-        "event PriceAdjusted(uint256 newPricePLT, uint256 oldPricePLT, string reason)",
-        "event UserCountUpdated(uint256 newUserCount, uint256 oldUserCount)",
-        "event TokensSold(uint256 amount, uint256 newPriceUSD)",
-        "event TokensBought(uint256 amount, uint256 newPriceUSD)",
-        "event DiscountToggled(bool active, uint256 endBlock)",
-        "event EmptyLastPrice(uint256 lastTokenPrice)",
-        "event DebugAdjustPrice(uint256 priceChangePercent, uint256 userChangePercent, uint256 tokenPriceUSD, uint256 lastTokenPrice, bool conditionsMet)"
-      ];
+            // --- CONSTANTS ---
+            const ACTION_MAP = {
+                0: "No Action", 1: "Lower Subscription Price", 2: "Raise Subscription Price",
+                3: "Sell 10% Reserve", 4: "Buy-Back Tokens", 5: "Sell 20% Reserve"
+            };
 
-      const TOKEN_ABI = [
-        "function approve(address spender, uint256 amount) external returns (bool)",
-        "function transfer(address to, uint256 amount) external returns (bool)",
-        "function grantRole(bytes32 role, address account) external"
-      ];
+            const scenarios = [
+                { name: "Month 1", userChange: 0.05, priceChange: 0.03 }, { name: "Month 2", userChange: 0.10, priceChange: 0.08 },
+                { name: "Month 3", userChange: -0.10, priceChange: -0.15 }, { name: "Month 4", userChange: 0.08, priceChange: 0.10 },
+                { name: "Month 5", userChange: 0.12, priceChange: 0.07 }, { name: "Month 6", userChange: 0.18, priceChange: 0.15 },
+                { name: "Month 7", userChange: -0.15, priceChange: -0.20 }, { name: "Month 8", userChange: 0.05, priceChange: 0.04 },
+                { name: "Month 9", userChange: 0.15, priceChange: 0.12 }, { name: "Month 10", userChange: 0.20, priceChange: 0.18 },
+                { name: "Month 11", userChange: -0.08, priceChange: -0.12 }, { name: "Month 12", userChange: 0.25, priceChange: 0.20 }
+            ];
 
-      // Scenarios from main_script.js
-      const scenarios = [
-        { name: "Month 1: Stable Launch", userChange: 0.05, priceChange: 0.03 },
-        { name: "Month 2: Early Adoption", userChange: 0.10, priceChange: 0.08 },
-        { name: "Month 3: Market Correction", userChange: -0.10, priceChange: -0.15 },
-        { name: "Month 4: Recovery Phase", userChange: 0.08, priceChange: 0.10 },
-        { name: "Month 5: Steady Growth", userChange: 0.12, priceChange: 0.07 },
-        { name: "Month 6: Bullish Surge", userChange: 0.18, priceChange: 0.15 },
-        { name: "Month 7: Sharp Decline", userChange: -0.15, priceChange: -0.20 },
-        { name: "Month 8: Stabilization", userChange: 0.05, priceChange: 0.04 },
-        { name: "Month 9: Renewed Uptick", userChange: 0.15, priceChange: 0.12 },
-        { name: "Month 10: Peak Momentum", userChange: 0.20, priceChange: 0.18 },
-        { name: "Month 11: Profit Taking", userChange: -0.08, priceChange: -0.12 },
-        { name: "Month 12: Strong Bull Run", userChange: 0.25, priceChange: 0.20 }
-      ];
+            const SUBSCRIPTION_ABI = [
+                "function applyCorrectiveAction(uint256 action) external", "function tokenPriceUSD() view returns (uint256)",
+                "function lastTokenPrice() view returns (uint256)", "function activeUsers() view returns (uint256)",
+                "function lastActiveUsers() view returns (uint256)", "function fiatAmount() view returns (uint256)",
+                "function tokenAmount() view returns (uint256)", "function reserveBalance() view returns (uint256)",
+                "function setFiatAmount(uint256 _fiatAmount) external", "function setLastTokenPrice(uint256 _lastTokenPrice) external",
+                "function simulateUserDrop(uint256 users) external", "function simulateUserIncrease(uint256 users) external"
+            ];
 
-      // Format functions
-      const formatUSD = (bn) => Number(ethers.utils.formatUnits(bn, 8)).toFixed(2);
-      const formatPLT = (bn) => Number(ethers.utils.formatUnits(bn, 18)).toFixed(2);
+            const TOKEN_ABI = ["function approve(address spender, uint256 amount) external returns (bool)"];
 
-      // Load neural network model and scaler
-      useEffect(() => {
-        async function loadModelAndScaler() {
-          try {
-            const model = await tf.loadLayersModel('/tfjs_model/model.json');
-            const scalerResponse = await fetch('/scaler.json');
-            const scalerData = await scalerResponse.json();
-            setModel(model);
-            setScaler(scalerData);
-            setStatus('Model and scaler loaded');
-          } catch (error) {
-            setStatus(`Error loading model or scaler: ${error.message}`);
-          }
-        }
-        loadModelAndScaler();
-      }, []);
+            // --- LOGGING UTILITY ---
+            const log = (message) => {
+                console.log(message);
+                setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
+            };
 
-      // Predict action (ported from Classify_action.py)
-      const predictAction = async (inputData) => {
-        if (!model || !scaler) {
-          return { predicted_action: 0, action_name: "No Action" };
-        }
-        try {
-          const [lastUsers, prevUsers, latestPriceChange, prevPriceChange, fiatAmount, tokenAmount, reserveBalance] = inputData;
-          const features = tf.tensor2d([[lastUsers, prevUsers, latestPriceChange, prevPriceChange, fiatAmount, tokenAmount, reserveBalance]], [1, 7], 'float32');
-          const mean = tf.tensor1d(scaler.mean, 'float32');
-          const scale = tf.tensor1d(scaler.scale, 'float32');
-          const featuresScaled = features.sub(mean).div(scale);
-          const prediction = model.predict(featuresScaled);
-          const predictedAction = prediction.argMax(-1).dataSync()[0];
-          features.dispose();
-          featuresScaled.dispose();
-          prediction.dispose();
-          return {
-            predicted_action: predictedAction,
-            action_name: ACTION_MAP[predictedAction] || "Unknown Action"
-          };
-        } catch (error) {
-          console.error('Prediction error:', error);
-          return { predicted_action: 0, action_name: "No Action" };
-        }
-      };
+            // --- INITIALIZATION ---
+            useEffect(() => {
+                async function initialize() {
+                    log('Loading AI model and scaler...');
+                    try {
+                        const loadedModel = await tf.loadLayersModel('tfjs_model/model.json');
+                        const scalerResponse = await fetch('scaler.json');
+                        if (!scalerResponse.ok) throw new Error(`scaler.json not found (status: ${scalerResponse.status})`);
+                        const loadedScaler = await scalerResponse.json();
+                        
+                        setModel(loadedModel);
+                        setScaler(loadedScaler);
+                        log('✅ AI Model and scaler loaded successfully.');
+                    } catch (error) {
+                        log(`❌ Error loading model/scaler: ${error.message}`);
+                        log("Please ensure 'tfjs_model/model.json' and 'scaler.json' are in the same directory as this HTML file.");
+                    } finally {
+                        setIsLoading(false);
+                    }
+                }
+                initialize();
+            }, []);
 
-      // Fetch contract state
-      const fetchContractState = async () => {
-        if (!window.ethereum) {
-          setStatus('Please install MetaMask');
-          return;
-        }
-        try {
-          const provider = new ethers.providers.Web3Provider(window.ethereum);
-          const subscription = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, provider);
-          const tokenPriceUSD = await subscription.tokenPriceUSD();
-          const activeUsers = await subscription.activeUsers();
-          const fiatAmount = await subscription.fiatAmount();
-          const subscriptionPricePLT = await subscription.subscriptionPricePLT();
-          const reserveBalance = await subscription.reserveBalance();
-          setContractState((prev) => ({
-            ...prev,
-            tokenPriceUSD: formatUSD(tokenPriceUSD),
-            activeUsers: activeUsers.toString(),
-            fiatAmount: formatUSD(fiatAmount),
-            subscriptionPricePLT: formatPLT(subscriptionPricePLT),
-            reserveBalance: formatPLT(reserveBalance)
-          }));
-        } catch (error) {
-          setStatus(`Error fetching state: ${error.message}`);
-        }
-      };
+            // --- CHART RENDERING ---
+            useEffect(() => {
+                if (chartData && chartRef.current) {
+                    if (chartInstance) {
+                        chartInstance.destroy();
+                    }
+                    const ctx = chartRef.current.getContext('2d');
+                    const newChartInstance = new Chart(ctx, {
+                        type: 'line',
+                        data: chartData,
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: { position: 'top' },
+                                title: { display: true, text: 'Token Price Simulation: AI vs. No AI', font: { size: 18 } }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: false,
+                                    title: { display: true, text: 'Token Price (USD)' },
+                                    ticks: { callback: value => '$' + value.toFixed(2) }
+                                }
+                            }
+                        }
+                    });
+                    setChartInstance(newChartInstance);
+                }
+            }, [chartData]);
 
-      // Simulate scenario
-      const runScenario = async () => {
-        if (!scenario) {
-          setStatus('Please select a scenario');
-          return;
-        }
-        if (!window.ethereum) {
-          setStatus('Please install MetaMask');
-          return;
-        }
-        if (!model || !scaler) {
-          setStatus('Model or scaler not loaded');
-          return;
-        }
-        try {
-          const provider = new ethers.providers.Web3Provider(window.ethereum);
-          await provider.send("eth_requestAccounts", []);
-          const signer = provider.getSigner();
-          const subscription = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, signer);
-          const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
+            // --- AI PREDICTION LOGIC ---
+            const predictAction = async (inputData) => {
+                if (!model || !scaler) {
+                    log("Model or scaler not ready.");
+                    return 0; // Default to "No Action"
+                }
+                // The model was trained on 4 features, ensure we only pass those.
+                const featuresArray = [inputData.lastUsers, inputData.prevUsers, inputData.priceChange, inputData.prevPriceChange];
 
-          const selectedScenario = scenarios.find(s => s.name === scenario);
-          setStatus(`Running ${selectedScenario.name}...`);
+                return tf.tidy(() => {
+                    const features = tf.tensor2d([featuresArray], [1, 4], 'float32');
+                    const mean = tf.tensor1d(scaler.mean.slice(0, 4), 'float32');
+                    const scale = tf.tensor1d(scaler.scale.slice(0, 4), 'float32');
+                    const scaledFeatures = features.sub(mean).div(scale);
+                    const prediction = model.predict(scaledFeatures);
+                    return prediction.argMax(-1).dataSync()[0];
+                });
+            };
+            
+            // --- CORE SIMULATION LOGIC ---
+            const runSingleScenario = async (provider, scenario, useAiAction) => {
+                const signer = provider.getSigner();
+                const subscription = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, signer);
+                const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
 
-          // Simulate price change
-          const currentTokenAmount = await subscription.tokenAmount();
-          const currentPriceUSD = await subscription.tokenPriceUSD();
-          const targetPriceUSD = currentPriceUSD.mul(Math.round((1 + selectedScenario.priceChange) * 100)).div(100);
-          const newFiatAmount = targetPriceUSD.mul(currentTokenAmount).div(ethers.utils.parseUnits("1", 18));
-          await subscription.setLastTokenPrice(currentPriceUSD);
-          await subscription.setFiatAmount(newFiatAmount);
+                log(`--- Running: ${scenario.name} (${useAiAction ? 'With AI' : 'Without AI'}) ---`);
 
-          // Simulate user change
-          const currentUsers = Number(await subscription.activeUsers());
-          const targetUsers = Math.max(10, Math.round(currentUsers * (1 + selectedScenario.userChange)));
-          const userChange = targetUsers - currentUsers;
-          if (userChange < 0) {
-            await subscription.simulateUserDrop(Math.abs(userChange));
-          } else if (userChange > 0) {
-            await subscription.simulateUserIncrease(userChange);
-          }
+                // 1. Get initial state
+                const initialPrice = await subscription.tokenPriceUSD();
+                const currentTokenAmount = await subscription.tokenAmount();
+                
+                // 2. Simulate price change by adjusting fiat amount
+                const targetPriceUSD = initialPrice.mul(Math.round((1 + scenario.priceChange) * 100)).div(100);
+                const newFiatAmount = targetPriceUSD.mul(currentTokenAmount).div(ethers.utils.parseUnits("1", 18));
+                
+                let tx = await subscription.setLastTokenPrice(initialPrice);
+                await tx.wait();
+                tx = await subscription.setFiatAmount(newFiatAmount);
+                await tx.wait();
+                log(`Price simulated: ${ethers.utils.formatUnits(initialPrice, 8)} -> ${ethers.utils.formatUnits(targetPriceUSD, 8)}`);
 
-          // Fetch updated state for neural network
-          const updatedUsers = Number(await subscription.activeUsers());
-          const prevUsers = Number(await subscription.lastActiveUsers());
-          const lastTokenPrice = await subscription.lastTokenPrice();
-          const fiatAmount = await subscription.fiatAmount();
-          const tokenAmount = await subscription.tokenAmount();
-          const reserveBalance = await subscription.reserveBalance();
+                // 3. Simulate user change
+                const currentUsers = await subscription.activeUsers();
+                const targetUsers = Math.max(10, Math.round(currentUsers.toNumber() * (1 + scenario.userChange)));
+                const userChange = targetUsers - currentUsers.toNumber();
+                
+                if (userChange < 0) {
+                    tx = await subscription.simulateUserDrop(Math.abs(userChange));
+                } else if (userChange > 0) {
+                    tx = await subscription.simulateUserIncrease(userChange);
+                }
+                await tx.wait();
+                log(`User count simulated: ${currentUsers.toString()} -> ${targetUsers}`);
 
-          // Predict action using TensorFlow.js
-          const inputData = [
-            updatedUsers,
-            prevUsers,
-            selectedScenario.priceChange,
-            0,
-            Number(ethers.utils.formatUnits(fiatAmount, 8)),
-            Number(ethers.utils.formatUnits(tokenAmount, 18)),
-            Number(ethers.utils.formatUnits(reserveBalance, 18))
-          ];
-          const { predicted_action, action_name } = await predictAction(inputData);
-          setContractState((prev) => ({
-            ...prev,
-            predictedAction: predicted_action,
-            actionName: action_name
-          }));
+                // 4. Get prediction and apply action (if enabled)
+                let actionToApply = 0;
+                if (useAiAction) {
+                    const updatedState = {
+                        lastUsers: (await subscription.activeUsers()).toNumber(),
+                        prevUsers: (await subscription.lastActiveUsers()).toNumber(),
+                        priceChange: scenario.priceChange,
+                        prevPriceChange: 0 // Simplified for demo
+                    };
+                    actionToApply = await predictAction(updatedState);
+                    log(`🧠 AI Predicted Action: ${ACTION_MAP[actionToApply]} (${actionToApply})`);
+                    
+                    if (actionToApply === 4) { // Buy-back
+                        log("Approving tokens for buy-back...");
+                        const exchangeSigner = await provider.getSigner(EXCHANGE_ADDRESS);
+                        tx = await token.connect(exchangeSigner).approve(SUBSCRIPTION_ADDRESS, ethers.utils.parseUnits("20000", 18));
+                        await tx.wait();
+                        log("Approval successful.");
+                    }
+                    
+                    tx = await subscription.applyCorrectiveAction(actionToApply);
+                    await tx.wait();
+                    log(`🚀 Action applied on-chain.`);
+                } else {
+                    log("Skipping AI action.");
+                }
 
-          // Approve tokens for buy-back (action 4)
-          if (predicted_action === 4) {
-            await token.approve(SUBSCRIPTION_ADDRESS, ethers.utils.parseUnits("2000", 18));
-          }
+                // 5. Return final price for charting
+                const finalPrice = await subscription.tokenPriceUSD();
+                log(`Final price for this step: $${ethers.utils.formatUnits(finalPrice, 8)}`);
+                return parseFloat(ethers.utils.formatUnits(finalPrice, 8));
+            };
 
-          // Apply corrective action
-          const actionTx = await subscription.applyCorrectiveAction(predicted_action);
-          await actionTx.wait();
+            const handleRunAll = async () => {
+                if (!window.ethereum) return log("❌ MetaMask is not installed.");
+                setIsLoading(true);
+                log("--- STARTING FULL 12-MONTH SIMULATION ---");
+                
+                try {
+                    const provider = new ethers.providers.Web3Provider(window.ethereum);
+                    await provider.send("eth_requestAccounts", []);
+                    log("Wallet connected.");
+                    
+                    // IMPORTANT: This demo assumes the contract state is reset before running.
+                    // In a real scenario, you'd have a 'reset' function or redeploy.
+                    log("NOTE: This demo requires the contract to be in its initial state.");
 
-          // Update contract state
-          await fetchContractState();
-          setStatus(`Scenario ${selectedScenario.name} completed: Action ${action_name}`);
-        } catch (error) {
-          setStatus(`Error: ${error.message}`);
-        }
-      };
+                    const pricesWithAi = [];
+                    const pricesWithoutAi = [];
 
-      useEffect(() => {
-        fetchContractState();
-      }, []);
+                    // Run with AI Actions
+                    log("\n--- PHASE 1: SIMULATING WITH AI ACTIONS ---");
+                    for (const scenario of scenarios) {
+                        const price = await runSingleScenario(provider, scenario, true);
+                        pricesWithAi.push(price);
+                    }
+                    
+                    // You would need to reset the contract state here before the second run.
+                    // For this demo, we'll just log a warning.
+                    log("\n--- PHASE 2: SIMULATING WITHOUT AI ACTIONS ---");
+                    log("WARNING: For accurate comparison, contract should be reset. Continuing simulation on current state.");
+                    for (const scenario of scenarios) {
+                        const price = await runSingleScenario(provider, scenario, false);
+                        pricesWithoutAi.push(price);
+                    }
 
-      return (
-        <div className="p-4 max-w-2xl mx-auto">
-          <h1 className="text-2xl font-bold mb-4">Tokenomics Demo</h1>
-          <p className="mb-2">Token Address: {TOKEN_ADDRESS}</p>
-          <p className="mb-2">SubscriptionManager Address: {SUBSCRIPTION_ADDRESS}</p>
-          <p className="mb-2">Owner Address: {OWNER_ADDRESS}</p>
-          <div className="mb-4">
-            <label className="block mb-2">Select Scenario:</label>
-            <select
-              value={scenario}
-              onChange={(e) => setScenario(e.target.value)}
-              className="border p-2 w-full"
-            >
-              <option value="">Select a scenario</option>
-              {scenarios.map((s) => (
-                <option key={s.name} value={s.name}>{s.name}</option>
-              ))}
-            </select>
-          </div>
-          <button
-            className="bg-blue-500 text-white p-2 rounded mb-4"
-            onClick={runScenario}
-          >
-            Run Scenario
-          </button>
-          <div className="mb-4">
-            <p>Token Price USD: ${contractState.tokenPriceUSD}</p>
-            <p>Active Users: {contractState.activeUsers}</p>
-            <p>Fiat Amount: ${contractState.fiatAmount}</p>
-            <p>Subscription Price PLT: {contractState.subscriptionPricePLT} PLT</p>
-            <p>Reserve Balance: {contractState.reserveBalance} PLT</p>
-            <p>Predicted Action: {contractState.actionName} ({contractState.predictedAction})</p>
-          </div>
-          <p className="text-red-500">{status}</p>
-          <a
-            href={`https://sepolia.etherscan.io/address/${SUBSCRIPTION_ADDRESS}`}
-            target="_blank"
-            className="text-blue-500 underline"
-          >
-            View on Sepolia Etherscan
-          </a>
-        </div>
-      );
-    };
+                    // Update chart
+                    setChartData({
+                        labels: scenarios.map(s => s.name),
+                        datasets: [
+                            {
+                                label: 'Price with AI Actions',
+                                data: pricesWithAi,
+                                borderColor: 'rgb(59, 130, 246)',
+                                backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                                tension: 0.1
+                            },
+                            {
+                                label: 'Price without AI (Control)',
+                                data: pricesWithoutAi,
+                                borderColor: 'rgb(239, 68, 68)',
+                                backgroundColor: 'rgba(239, 68, 68, 0.5)',
+                                tension: 0.1
+                            }
+                        ]
+                    });
+                    log("\n✅ Full simulation complete. Chart updated.");
 
-    ReactDOM.render(<App />, document.getElementById('root'));
-  </script>
+                } catch (error) {
+                    log(`❌ An error occurred: ${error.message}`);
+                    console.error(error);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            
+            return (
+                <div className="p-4 md:p-8 max-w-7xl mx-auto">
+                    <header className="text-center mb-8">
+                        <h1 className="text-4xl font-bold text-gray-800">AI-Powered Tokenomics Engine</h1>
+                        <p className="text-lg text-gray-500 mt-2">Live Demonstration on the Sepolia Testnet</p>
+                    </header>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        {/* Left Column: Controls & Logs */}
+                        <div className="lg:col-span-1">
+                            <div className="card">
+                                <h2 className="text-2xl font-semibold text-gray-700 mb-4">Controls</h2>
+                                <button
+                                    className="w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-lg btn"
+                                    onClick={handleRunAll}
+                                    disabled={isLoading || !model}
+                                >
+                                    {isLoading ? 'Simulation in Progress...' : '▶️ Run Simulation'}
+                                </button>
+                                <a
+                                    href={`https://sepolia.etherscan.io/address/${SUBSCRIPTION_ADDRESS}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block w-full text-center mt-4 bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg btn"
+                                >
+                                    View Contract on Etherscan
+                                </a>
+                            </div>
+                            <div className="card">
+                                <h2 className="text-2xl font-semibold text-gray-700 mb-4">Live Status Log</h2>
+                                <div className="status-log">
+                                    {logs.map((logMsg, i) => <div key={i}>{logMsg}</div>)}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right Column: Chart */}
+                        <div className="lg:col-span-2">
+                            <div className="card">
+                                <h2 className="text-2xl font-semibold text-gray-700 mb-4">Simulation Results</h2>
+                                {chartData ? (
+                                    <canvas ref={chartRef}></canvas>
+                                ) : (
+                                    <div className="text-center py-16 text-gray-500">
+                                        <p>Chart will be displayed here after running the simulation.</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
 </body>
 </html>
