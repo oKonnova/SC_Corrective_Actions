@@ -68,9 +68,9 @@
             const chartRef = useRef(null);
 
             // --- CONFIGURATION ---
-            const TOKEN_ADDRESS = '0x5031B2560a72450659D68F8d290f0577F96C3f0Ed'; // SCPlusToken address
-            const SUBSCRIPTION_ADDRESS = '0xd21687210FDc0367C6175bF5a7E0577F96C3f0Ed'; // Address of the contract that WILL use AI actions.
-            const SUBSCRIPTION_NO_ACTION_ADDRESS = '0xA8059A9E7E0AE1B55B33b3CC7E2873E5923E7c16'; // Address of the second contract that WILL NOT use AI actions.
+            const TOKEN_ADDRESS = '0x44b9Ad85B4576726C3a238A206A58DF634C91AbB'; // SCPlusToken address
+            const SUBSCRIPTION_ADDRESS = '0xfD51dB08F94a64EF8Ea10eb21bF6B27252799ac6'; // Address of the contract that WILL use AI actions.
+            const SUBSCRIPTION_NO_ACTION_ADDRESS = '0xD53D8623D1B0253b4045300A2304bDaf98f5538C'; // Address of the second contract that WILL NOT use AI actions.
             const EXCHANGE_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Address of the account that can approve tokens for buy-back.
 
             // --- UTILITY FUNCTIONS ---
@@ -255,18 +255,11 @@
                         tokenAmount
                     );
 
-                    log(`${logPrefix} 🧠 Predicted Action: ${ACTION_MAP[predictedAction]}`);
-
-                    if (predictedAction === 4) {
-                        log(`${logPrefix} Approving tokens for buy-back...`);
-                        const exchangeSigner = provider.getSigner(EXCHANGE_ADDRESS);
-                        tx = await token.connect(exchangeSigner).approve(contractAddress, ethers.parseUnits("20000", 18));
-                        await tx.wait();
-                    }
+                    log(`${logPrefix} Predicted Action: ${ACTION_MAP[predictedAction]}`);
 
                     tx = await subscription.applyCorrectiveAction(predictedAction);
                     await tx.wait();
-                    log(`${logPrefix} 🚀 Action applied on-chain.`);
+                    log(`${logPrefix} Action applied on-chain.`);
                 }
 
                 const finalPrice = await subscription.tokenPriceUSD();
@@ -276,7 +269,6 @@
 
             const handleRunAll = async () => {
                 if (!window.ethereum) return log("❌ MetaMask is not installed.");
-                if (SUBSCRIPTION_NO_ACTION_ADDRESS === '0x...') return log("❌ Please set the second contract address.");
                 setIsLoading(true);
                 setChartData(null); // Clear previous chart
                 log("--- STARTING PARALLEL SIMULATION ---");
@@ -351,7 +343,7 @@
                                     onClick={handleRunAll}
                                     disabled={isLoading}
                                 >
-                                    {isLoading ? 'Simulation in Progress...' : '▶️ Run A/B Test Simulation'}
+                                    {isLoading ? 'Simulation in Progress...' : '▶️ Run Simulation'}
                                 </button>
                                 <div className="mt-4 space-y-2">
                                     <a href={`https://sepolia.etherscan.io/address/${SUBSCRIPTION_ADDRESS}`} target="_blank" rel="noopener noreferrer" className="block w-full text-center bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg btn">
@@ -374,7 +366,7 @@
                                     <canvas ref={chartRef}></canvas>
                                 ) : (
                                     <div className="text-center py-16 text-gray-500">
-                                        <p>A/B test chart will be displayed here after running the simulation.</p>
+                                        <p>Сhart will be displayed here after running the simulation.</p>
                                     </div>
                                 )}
                             </div>
