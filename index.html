@@ -75,11 +75,11 @@
 
             // --- UTILITY FUNCTIONS ---
             function formatUSD(bn) {
-                return Number(ethers.formatUnits(bn, 8)).toFixed(2);
+                return Number(ethers.utils.formatUnits(bn, 8)).toFixed(2);
             }
 
             function formatPLT(bn) {
-                return Number(ethers.formatUnits(bn, 18)).toFixed(2);
+                return Number(ethers.utils.formatUnits(bn, 18)).toFixed(2);
             }
 
             // --- CONSTANTS ---
@@ -150,10 +150,10 @@
             // --- ACTION EVALUATION LOGIC ---
             const evaluateSubscriptionPrice = (userChangePercent, latestPriceChange, fiatAmount, reserveBalance, tokenPriceUSD, tokenAmount) => {
                 // Convert BigInt to Number, handling decimals
-                const fiatAmountNum = Number(ethers.formatUnits(fiatAmount, 8));
-                const reserveBalanceNum = Number(ethers.formatUnits(reserveBalance, 18));
-                const tokenPriceUsdNum = Number(ethers.formatUnits(tokenPriceUSD, 8));
-                const tokenAmountNum = Number(ethers.formatUnits(tokenAmount, 18));
+                const fiatAmountNum = Number(ethers.utils.formatUnits(fiatAmount, 8));
+                const reserveBalanceNum = Number(ethers.utils.formatUnits(reserveBalance, 18));
+                const tokenPriceUsdNum = Number(ethers.utils.formatUnits(tokenPriceUSD, 8));
+                const tokenAmountNum = Number(ethers.utils.formatUnits(tokenAmount, 18));
 
                 if (userChangePercent < 0.05 && latestPriceChange > 0.05) {
                     return 1; // Lower Subscription Price
@@ -271,7 +271,7 @@
 
                 const finalPrice = await subscription.tokenPriceUSD();
                 log(`${logPrefix} Final price for this step: $${formatUSD(finalPrice)}`);
-                return parseFloat(ethers.formatUnits(finalPrice, 8));
+                return parseFloat(ethers.utils.formatUnits(finalPrice, 8));
             };
 
             const handleRunAll = async () => {
