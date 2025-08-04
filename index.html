@@ -72,12 +72,11 @@
             const chartRef = useRef(null);
 
             // --- CONFIGURATION (REPLACE WITH YOUR ACTUAL DATA) ---
-            // IMPORTANT: Replace these placeholder addresses with your actual deployed contract addresses.
-            const SUBSCRIPTION_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3'; // Your SubscriptionManager address
-            const TOKEN_ADDRESS = '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'; // Your SCPlusToken address
-            
-            // This should be the address of the exchange or account that can trigger the buy-back approval
-            const EXCHANGE_ADDRESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'; 
+            // IMPORTANT: You must deploy your SubscriptionManager contract TWICE.
+            const TOKEN_ADDRESS = '0x5031B2560a72450659D68F8d290f218143E5E19F'; // Your SCPlusToken address
+            const SUBSCRIPTION_ADDRESS = '0xd21687210FDc0367C6175bF5a7E0577F96C3f0Ed'; // Address of the contract that WILL use AI actions.
+            const SUBSCRIPTION_NO_ACTION_ADDRESS = '0xA8059A9E7E0AE1B55B33b3CC7E2873E5923E7c16'; // Address of the second contract that WILL NOT use AI actions (the control).
+            const EXCHANGE_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Address of the account that can approve tokens for buy-back.
 
             // --- CONSTANTS ---
             const ACTION_MAP = {
@@ -123,10 +122,9 @@
                         
                         setModel(loadedModel);
                         setScaler(loadedScaler);
-                        log('✅ AI Model and scaler loaded successfully.');
+                        log('✅ Model and scaler loaded successfully.');
                     } catch (error) {
                         log(`❌ Error loading model/scaler: ${error.message}`);
-                        log("Please ensure 'tfjs_model/model.json' and 'scaler.json' are in the same directory as this HTML file.");
                     } finally {
                         setIsLoading(false);
                     }
@@ -137,9 +135,7 @@
             // --- CHART RENDERING ---
             useEffect(() => {
                 if (chartData && chartRef.current) {
-                    if (chartInstance) {
-                        chartInstance.destroy();
-                    }
+                    if (chartInstance) chartInstance.destroy();
                     const ctx = chartRef.current.getContext('2d');
                     const newChartInstance = new Chart(ctx, {
                         type: 'line',
@@ -167,11 +163,9 @@
             const predictAction = async (inputData) => {
                 if (!model || !scaler) {
                     log("Model or scaler not ready.");
-                    return 0; // Default to "No Action"
+                    return 0;
                 }
-                // The model was trained on 4 features, ensure we only pass those.
                 const featuresArray = [inputData.lastUsers, inputData.prevUsers, inputData.priceChange, inputData.prevPriceChange];
-
                 return tf.tidy(() => {
                     const features = tf.tensor2d([featuresArray], [1, 4], 'float32');
                     const mean = tf.tensor1d(scaler.mean.slice(0, 4), 'float32');
@@ -183,18 +177,17 @@
             };
             
             // --- CORE SIMULATION LOGIC ---
-            const runSingleScenario = async (provider, scenario, useAiAction) => {
+            const runSingleScenario = async (provider, scenario, contractAddress, useAiAction) => {
+                const logPrefix = useAiAction ? "[AI]" : "[Control]";
                 const signer = provider.getSigner();
-                const subscription = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, signer);
+                const subscription = new ethers.Contract(contractAddress, SUBSCRIPTION_ABI, signer);
                 const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
 
-                log(`--- Running: ${scenario.name} (${useAiAction ? 'With AI' : 'Without AI'}) ---`);
+                log(`${logPrefix} Running: ${scenario.name}`);
 
-                // 1. Get initial state
                 const initialPrice = await subscription.tokenPriceUSD();
                 const currentTokenAmount = await subscription.tokenAmount();
                 
-                // 2. Simulate price change by adjusting fiat amount
                 const targetPriceUSD = initialPrice.mul(Math.round((1 + scenario.priceChange) * 100)).div(100);
                 const newFiatAmount = targetPriceUSD.mul(currentTokenAmount).div(ethers.utils.parseUnits("1", 18));
                 
@@ -202,9 +195,7 @@
                 await tx.wait();
                 tx = await subscription.setFiatAmount(newFiatAmount);
                 await tx.wait();
-                log(`Price simulated: ${ethers.utils.formatUnits(initialPrice, 8)} -> ${ethers.utils.formatUnits(targetPriceUSD, 8)}`);
 
-                // 3. Simulate user change
                 const currentUsers = await subscription.activeUsers();
                 const targetUsers = Math.max(10, Math.round(currentUsers.toNumber() * (1 + scenario.userChange)));
                 const userChange = targetUsers - currentUsers.toNumber();
@@ -215,75 +206,63 @@
                     tx = await subscription.simulateUserIncrease(userChange);
                 }
                 await tx.wait();
-                log(`User count simulated: ${currentUsers.toString()} -> ${targetUsers}`);
-
-                // 4. Get prediction and apply action (if enabled)
-                let actionToApply = 0;
+                
                 if (useAiAction) {
                     const updatedState = {
                         lastUsers: (await subscription.activeUsers()).toNumber(),
                         prevUsers: (await subscription.lastActiveUsers()).toNumber(),
                         priceChange: scenario.priceChange,
-                        prevPriceChange: 0 // Simplified for demo
+                        prevPriceChange: 0
                     };
-                    actionToApply = await predictAction(updatedState);
-                    log(`🧠 AI Predicted Action: ${ACTION_MAP[actionToApply]} (${actionToApply})`);
+                    const actionToApply = await predictAction(updatedState);
+                    log(`${logPrefix} 🧠 AI Predicted Action: ${ACTION_MAP[actionToApply]}`);
                     
-                    if (actionToApply === 4) { // Buy-back
-                        log("Approving tokens for buy-back...");
-                        const exchangeSigner = await provider.getSigner(EXCHANGE_ADDRESS);
-                        tx = await token.connect(exchangeSigner).approve(SUBSCRIPTION_ADDRESS, ethers.utils.parseUnits("20000", 18));
+                    if (actionToApply === 4) {
+                        log(`${logPrefix} Approving tokens for buy-back...`);
+                        const exchangeSigner = provider.getSigner(EXCHANGE_ADDRESS);
+                        tx = await token.connect(exchangeSigner).approve(contractAddress, ethers.utils.parseUnits("20000", 18));
                         await tx.wait();
-                        log("Approval successful.");
                     }
                     
                     tx = await subscription.applyCorrectiveAction(actionToApply);
                     await tx.wait();
-                    log(`🚀 Action applied on-chain.`);
-                } else {
-                    log("Skipping AI action.");
+                    log(`${logPrefix} 🚀 Action applied on-chain.`);
                 }
 
-                // 5. Return final price for charting
                 const finalPrice = await subscription.tokenPriceUSD();
-                log(`Final price for this step: $${ethers.utils.formatUnits(finalPrice, 8)}`);
+                log(`${logPrefix} Final price for this step: $${ethers.utils.formatUnits(finalPrice, 8)}`);
                 return parseFloat(ethers.utils.formatUnits(finalPrice, 8));
             };
 
             const handleRunAll = async () => {
                 if (!window.ethereum) return log("❌ MetaMask is not installed.");
+                if (SUBSCRIPTION_NO_ACTION_ADDRESS === '0x...') return log("❌ Please set the second contract address.");
                 setIsLoading(true);
-                log("--- STARTING FULL 12-MONTH SIMULATION ---");
+                setChartData(null); // Clear previous chart
+                log("--- STARTING PARALLEL SIMULATION ---");
                 
                 try {
                     const provider = new ethers.providers.Web3Provider(window.ethereum);
                     await provider.send("eth_requestAccounts", []);
                     log("Wallet connected.");
-                    
-                    // IMPORTANT: This demo assumes the contract state is reset before running.
-                    // In a real scenario, you'd have a 'reset' function or redeploy.
-                    log("NOTE: This demo requires the contract to be in its initial state.");
+                    log("NOTE: This demo requires both contracts to be in their initial, identical states for a valid comparison.");
 
                     const pricesWithAi = [];
                     const pricesWithoutAi = [];
 
-                    // Run with AI Actions
-                    log("\n--- PHASE 1: SIMULATING WITH AI ACTIONS ---");
                     for (const scenario of scenarios) {
-                        const price = await runSingleScenario(provider, scenario, true);
-                        pricesWithAi.push(price);
-                    }
-                    
-                    // You would need to reset the contract state here before the second run.
-                    // For this demo, we'll just log a warning.
-                    log("\n--- PHASE 2: SIMULATING WITHOUT AI ACTIONS ---");
-                    log("WARNING: For accurate comparison, contract should be reset. Continuing simulation on current state.");
-                    for (const scenario of scenarios) {
-                        const price = await runSingleScenario(provider, scenario, false);
-                        pricesWithoutAi.push(price);
+                        log(`\n--- SCENARIO: ${scenario.name} ---`);
+                        
+                        // Run on AI contract
+                        const priceAi = await runSingleScenario(provider, scenario, SUBSCRIPTION_ADDRESS, true);
+                        pricesWithAi.push(priceAi);
+
+                        // Run on Control contract
+                        const priceNoAi = await runSingleScenario(provider, scenario, SUBSCRIPTION_NO_ACTION_ADDRESS, false);
+                        pricesWithoutAi.push(priceNoAi);
                     }
 
-                    // Update chart
+                    // Update chart with final results
                     setChartData({
                         labels: scenarios.map(s => s.name),
                         datasets: [
@@ -292,14 +271,17 @@
                                 data: pricesWithAi,
                                 borderColor: 'rgb(59, 130, 246)',
                                 backgroundColor: 'rgba(59, 130, 246, 0.5)',
-                                tension: 0.1
+                                tension: 0.2,
+                                borderWidth: 2.5
                             },
                             {
                                 label: 'Price without AI (Control)',
                                 data: pricesWithoutAi,
                                 borderColor: 'rgb(239, 68, 68)',
                                 backgroundColor: 'rgba(239, 68, 68, 0.5)',
-                                tension: 0.1
+                                tension: 0.2,
+                                borderWidth: 2.5,
+                                borderDash: [5, 5]
                             }
                         ]
                     });
@@ -317,11 +299,10 @@
                 <div className="p-4 md:p-8 max-w-7xl mx-auto">
                     <header className="text-center mb-8">
                         <h1 className="text-4xl font-bold text-gray-800">AI-Powered Tokenomics Engine</h1>
-                        <p className="text-lg text-gray-500 mt-2">Live Demonstration on the Sepolia Testnet</p>
+                        <p className="text-lg text-gray-500 mt-2">Live A/B Test on the Sepolia Testnet</p>
                     </header>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                        {/* Left Column: Controls & Logs */}
                         <div className="lg:col-span-1">
                             <div className="card">
                                 <h2 className="text-2xl font-semibold text-gray-700 mb-4">Controls</h2>
@@ -330,16 +311,13 @@
                                     onClick={handleRunAll}
                                     disabled={isLoading || !model}
                                 >
-                                    {isLoading ? 'Simulation in Progress...' : '▶️ Run Simulation'}
+                                    {isLoading ? 'Simulation in Progress...' : '▶️ Run A/B Test Simulation'}
                                 </button>
-                                <a
-                                    href={`https://sepolia.etherscan.io/address/${SUBSCRIPTION_ADDRESS}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block w-full text-center mt-4 bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg btn"
-                                >
-                                    View Contract on Etherscan
-                                </a>
+                                <div className="mt-4 space-y-2">
+                                     <a href={`https://sepolia.etherscan.io/address/${SUBSCRIPTION_ADDRESS}`} target="_blank" rel="noopener noreferrer" className="block w-full text-center bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg btn">
+                                        View AI Contract on Etherscan
+                                    </a>
+                                </div>
                             </div>
                             <div className="card">
                                 <h2 className="text-2xl font-semibold text-gray-700 mb-4">Live Status Log</h2>
@@ -349,7 +327,6 @@
                             </div>
                         </div>
 
-                        {/* Right Column: Chart */}
                         <div className="lg:col-span-2">
                             <div className="card">
                                 <h2 className="text-2xl font-semibold text-gray-700 mb-4">Simulation Results</h2>
@@ -357,7 +334,7 @@
                                     <canvas ref={chartRef}></canvas>
                                 ) : (
                                     <div className="text-center py-16 text-gray-500">
-                                        <p>Chart will be displayed here after running the simulation.</p>
+                                        <p>A/B test chart will be displayed here after running the simulation.</p>
                                     </div>
                                 )}
                             </div>
