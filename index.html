@@ -202,6 +202,10 @@
         
             const initialPrice = await subscription.tokenPriceUSD(); // BigInt
             const currentTokenAmount = await subscription.tokenAmount(); // BigInt
+
+            log(`${logPrefix} initialPrice: ${initialPrice}, type: ${typeof initialPrice}`);
+            log(`${logPrefix} currentTokenAmount: ${currentTokenAmount}, type: ${typeof currentTokenAmount}`);
+            log(`${logPrefix} targetPriceUSD: ${targetPriceUSD}, type: ${typeof targetPriceUSD}`);
         
             // Convert priceChange to BigInt-compatible format (scale by 10000 for 4 decimal precision)
             const priceChangeScaled = BigInt(Math.round(scenario.priceChange * 10000));
