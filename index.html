@@ -69,9 +69,18 @@
 
             // --- CONFIGURATION ---
             const TOKEN_ADDRESS = '0x5031B2560a72450659D68F8d290f0577F96C3f0Ed'; // SCPlusToken address
-            const SUBSCRIPTION_ADDRESS = '0xd21687210FDc0367C6175bF5a7E0577F96C3f0Ed'; // Address of the contract that WILL use AI actions
-            const SUBSCRIPTION_NO_ACTION_ADDRESS = '0xA8059A9E7E0AE1B55B33b3CC7E2873E5923E7c16'; // Address of the second contract that WILL NOT use AI actions
-            const EXCHANGE_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Address of the account that can approve tokens for buy-back
+            const SUBSCRIPTION_ADDRESS = '0xd21687210FDc0367C6175bF5a7E0577F96C3f0Ed'; // Address of the contract that WILL use AI actions.
+            const SUBSCRIPTION_NO_ACTION_ADDRESS = '0xA8059A9E7E0AE1B55B33b3CC7E2873E5923E7c16'; // Address of the second contract that WILL NOT use AI actions.
+            const EXCHANGE_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Address of the account that can approve tokens for buy-back.
+
+            // --- UTILITY FUNCTIONS ---
+            function formatUSD(bn) {
+                return Number(ethers.formatUnits(bn, 8)).toFixed(2);
+            }
+
+            function formatPLT(bn) {
+                return Number(ethers.formatUnits(bn, 18)).toFixed(2);
+            }
 
             // --- CONSTANTS ---
             const ACTION_MAP = {
@@ -107,11 +116,7 @@
 
             // --- INITIALIZATION ---
             useEffect(() => {
-                // Commented out neural network loading
-                // setIsLoading(true);
-                // log('🧠 Loading neural network model...');
-                // Note: Neural network loading has been removed as per requirements
-                setIsLoading(false);
+                setIsLoading(false); // No model loading needed
                 log('✅ Initialization complete (no neural network).');
             }, []);
 
@@ -143,11 +148,11 @@
             }, [chartData]);
 
             // --- ACTION EVALUATION LOGIC ---
-            const evaluateSubscriptionPrice = (userChangePercent, latestPriceChange, fiatAmount, reserveBalance, tokenPriceUsd, tokenAmount) => {
+            const evaluateSubscriptionPrice = (userChangePercent, latestPriceChange, fiatAmount, reserveBalance, tokenPriceUSD, tokenAmount) => {
                 // Convert BigInt to Number, handling decimals
                 const fiatAmountNum = Number(ethers.formatUnits(fiatAmount, 8));
                 const reserveBalanceNum = Number(ethers.formatUnits(reserveBalance, 18));
-                const tokenPriceUsdNum = Number(ethers.formatUnits(tokenPriceUsd, 8));
+                const tokenPriceUsdNum = Number(ethers.formatUnits(tokenPriceUSD, 8));
                 const tokenAmountNum = Number(ethers.formatUnits(tokenAmount, 18));
 
                 if (userChangePercent < 0.05 && latestPriceChange > 0.05) {
@@ -176,13 +181,12 @@
                 const sell10Amount = 0.1 * reserveBalance;
                 const fiatGained10 = sell10Amount * tokenPriceUsd;
                 const newTokenAmount10 = tokenAmount - sell10Amount;
-                const newFiat10 = fiatAmount + fiatGained10;
-                actions[3] = newTokenAmount10 > 0 ? newFiat10 / newTokenAmount10 : 0;
+                actions[3] = newTokenAmount10 > 0 ? fiatGained10 / newTokenAmount10 : 0;
 
                 // Action 4: Buy back tokens using 10% of the fiat reserve
                 const fiatToSpend = 0.1 * fiatAmount;
                 const tokensBought = tokenPriceUsd > 0 ? fiatToSpend / tokenPriceUsd : 0;
-                const newTokenAmountBuy = tokenAmount - tokensBought;
+                const newTokenAmountBuy = tokenAmount + tokensBought;
                 const newFiatBuy = fiatAmount - fiatToSpend;
                 actions[4] = (newTokenAmountBuy > 0 && newFiatBuy > 0) ? newFiatBuy / newTokenAmountBuy : 0;
 
@@ -192,84 +196,83 @@
             };
 
             // --- CORE SIMULATION LOGIC ---
-           const runSingleScenario = async (provider, scenario, contractAddress, useAiAction) => {
-            const logPrefix = useAiAction ? "[AI]" : "[Control]";
-            const signer = provider.getSigner();
-            const subscription = new ethers.Contract(contractAddress, SUBSCRIPTION_ABI, signer);
-            const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
-        
-            log(`${logPrefix} Running: ${scenario.name}`);
-        
-            const initialPrice = await subscription.tokenPriceUSD(); // BigInt
-            const currentTokenAmount = await subscription.tokenAmount(); // BigInt
+            const runSingleScenario = async (provider, scenario, contractAddress, useAiAction) => {
+                const logPrefix = useAiAction ? "[AI]" : "[Control]";
+                const signer = provider.getSigner();
+                const subscription = new ethers.Contract(contractAddress, SUBSCRIPTION_ABI, signer);
+                const token = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
 
-            log(`${logPrefix} initialPrice: ${initialPrice}, type: ${typeof initialPrice}`);
-            log(`${logPrefix} currentTokenAmount: ${currentTokenAmount}, type: ${typeof currentTokenAmount}`);
-            log(`${logPrefix} targetPriceUSD: ${targetPriceUSD}, type: ${typeof targetPriceUSD}`);
-        
-            // Convert priceChange to BigInt-compatible format (scale by 10000 for 4 decimal precision)
-            const priceChangeScaled = BigInt(Math.round(scenario.priceChange * 10000));
-            const oneHundred = 10000n;
-            // Ensure all operations use BigInt
-            const targetPriceUSD = (initialPrice * (10000n + priceChangeScaled)) / oneHundred;
-            const newFiatAmount = (targetPriceUSD * currentTokenAmount) / (10n ** 18n);
-        
-            let tx = await subscription.setLastTokenPrice(initialPrice);
-            await tx.wait();
-            tx = await subscription.setFiatAmount(newFiatAmount);
-            await tx.wait();
-        
-            const currentUsers = await subscription.activeUsers(); // BigInt
-            // Convert BigInt to number for user calculations
-            const currentUsersNum = Number(currentUsers);
-            const targetUsers = Math.max(10, Math.round(currentUsersNum * (1 + scenario.userChange)));
-            const userChange = targetUsers - currentUsersNum;
-        
-            if (userChange < 0) {
-                tx = await subscription.simulateUserDrop(Math.abs(userChange));
-            } else if (userChange > 0) {
-                tx = await subscription.simulateUserIncrease(userChange);
-            }
-            await tx.wait();
-        
-            if (useAiAction) {
-                const updatedUsers = Number(await subscription.activeUsers()); // Convert BigInt to number
-                const prevUsers = Number(await subscription.lastActiveUsers()); // Convert BigInt to number
-                const priceChange = scenario.priceChange;
-                const prevPriceChange = 0;
-                const fiatAmount = await subscription.fiatAmount(); // BigInt
-                const tokenAmount = await subscription.tokenAmount(); // BigInt
-                const reserveBalance = await subscription.reserveBalance(); // BigInt
-                const tokenPriceUSD = await subscription.tokenPriceUSD(); // BigInt
-        
-                const userChangePercent = prevUsers > 0 ? ((updatedUsers - prevUsers) / prevUsers) * 100 : 0;
-                const predictedAction = evaluateSubscriptionPrice(
-                    userChangePercent,
-                    priceChange,
-                    fiatAmount,
-                    reserveBalance,
-                    tokenPriceUSD,
-                    tokenAmount
-                );
-        
-                log(`${logPrefix} Predicted Action: ${ACTION_MAP[predictedAction]}`);
-        
-                if (predictedAction === 4) {
-                    log(`${logPrefix} Approving tokens for buy-back...`);
-                    const exchangeSigner = provider.getSigner(EXCHANGE_ADDRESS);
-                    tx = await token.connect(exchangeSigner).approve(contractAddress, ethers.parseUnits("20000", 18));
-                    await tx.wait();
-                }
-        
-                tx = await subscription.applyCorrectiveAction(predictedAction);
+                log(`${logPrefix} Running: ${scenario.name}`);
+
+                const initialPrice = await subscription.tokenPriceUSD();
+                const currentTokenAmount = await subscription.tokenAmount();
+
+                log(`${logPrefix} initialPrice: $${formatUSD(initialPrice)}, type: ${typeof initialPrice}`);
+                log(`${logPrefix} currentTokenAmount: ${formatPLT(currentTokenAmount)} PLT, type: ${typeof currentTokenAmount}`);
+
+                // Convert priceChange to BigNumber with 4 decimal precision (scale by 10000)
+                const priceChangeScaled = ethers.BigNumber.from(Math.round(scenario.priceChange * 10000));
+                const oneHundred = ethers.BigNumber.from(10000);
+                const targetPriceUSD = initialPrice.mul(oneHundred.add(priceChangeScaled)).div(oneHundred);
+
+                log(`${logPrefix} targetPriceUSD: $${formatUSD(targetPriceUSD)}, type: ${typeof targetPriceUSD}`);
+
+                const newFiatAmount = targetPriceUSD.mul(currentTokenAmount).div(ethers.BigNumber.from(10).pow(18));
+
+                let tx = await subscription.setLastTokenPrice(initialPrice);
                 await tx.wait();
-                log(`${logPrefix} Action applied.`);
-            }
-        
-            const finalPrice = await subscription.tokenPriceUSD();
-            log(`${logPrefix} Final price for this step: $${ethers.formatUnits(finalPrice, 8)}`);
-            return parseFloat(ethers.formatUnits(finalPrice, 8));
-        };
+                tx = await subscription.setFiatAmount(newFiatAmount);
+                await tx.wait();
+
+                const currentUsers = await subscription.activeUsers();
+                const targetUsers = Math.max(10, Math.round(currentUsers.toNumber() * (1 + scenario.userChange)));
+                const userChange = targetUsers - currentUsers.toNumber();
+
+                if (userChange < 0) {
+                    tx = await subscription.simulateUserDrop(Math.abs(userChange));
+                } else if (userChange > 0) {
+                    tx = await subscription.simulateUserIncrease(userChange);
+                }
+                await tx.wait();
+
+                if (useAiAction) {
+                    const updatedUsers = (await subscription.activeUsers()).toNumber();
+                    const prevUsers = (await subscription.lastActiveUsers()).toNumber();
+                    const priceChange = scenario.priceChange;
+                    const prevPriceChange = 0;
+                    const fiatAmount = await subscription.fiatAmount();
+                    const tokenAmount = await subscription.tokenAmount();
+                    const reserveBalance = await subscription.reserveBalance();
+                    const tokenPriceUSD = await subscription.tokenPriceUSD();
+
+                    const userChangePercent = prevUsers > 0 ? ((updatedUsers - prevUsers) / prevUsers) * 100 : 0;
+                    const predictedAction = evaluateSubscriptionPrice(
+                        userChangePercent,
+                        priceChange,
+                        fiatAmount,
+                        reserveBalance,
+                        tokenPriceUSD,
+                        tokenAmount
+                    );
+
+                    log(`${logPrefix} 🧠 Predicted Action: ${ACTION_MAP[predictedAction]}`);
+
+                    if (predictedAction === 4) {
+                        log(`${logPrefix} Approving tokens for buy-back...`);
+                        const exchangeSigner = provider.getSigner(EXCHANGE_ADDRESS);
+                        tx = await token.connect(exchangeSigner).approve(contractAddress, ethers.parseUnits("20000", 18));
+                        await tx.wait();
+                    }
+
+                    tx = await subscription.applyCorrectiveAction(predictedAction);
+                    await tx.wait();
+                    log(`${logPrefix} 🚀 Action applied on-chain.`);
+                }
+
+                const finalPrice = await subscription.tokenPriceUSD();
+                log(`${logPrefix} Final price for this step: $${formatUSD(finalPrice)}`);
+                return parseFloat(ethers.formatUnits(finalPrice, 8));
+            };
 
             const handleRunAll = async () => {
                 if (!window.ethereum) return log("❌ MetaMask is not installed.");
