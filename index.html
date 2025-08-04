@@ -69,9 +69,9 @@
 
             // --- CONFIGURATION ---
             const TOKEN_ADDRESS = '0x5031B2560a72450659D68F8d290f0577F96C3f0Ed'; // SCPlusToken address
-            const SUBSCRIPTION_ADDRESS = '0xd21687210FDc0367C6175bF5a7E0577F96C3f0Ed'; // Address of the contract that WILL use AI actions.
-            const SUBSCRIPTION_NO_ACTION_ADDRESS = '0xA8059A9E7E0AE1B55B33b3CC7E2873E5923E7c16'; // Address of the second contract that WILL NOT use AI actions.
-            const EXCHANGE_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Address of the account that can approve tokens for buy-back.
+            const SUBSCRIPTION_ADDRESS = '0xd21687210FDc0367C6175bF5a7E0577F96C3f0Ed'; // Address of the contract that WILL use AI actions
+            const SUBSCRIPTION_NO_ACTION_ADDRESS = '0xA8059A9E7E0AE1B55B33b3CC7E2873E5923E7c16'; // Address of the second contract that WILL NOT use AI actions
+            const EXCHANGE_ADDRESS = '0xd1B4561DfcCe893F51e74b0Ce399be749A3c61Ec'; // Address of the account that can approve tokens for buy-back
 
             // --- CONSTANTS ---
             const ACTION_MAP = {
@@ -107,7 +107,11 @@
 
             // --- INITIALIZATION ---
             useEffect(() => {
-                setIsLoading(false); // No model loading needed
+                // Commented out neural network loading
+                // setIsLoading(true);
+                // log('🧠 Loading neural network model...');
+                // Note: Neural network loading has been removed as per requirements
+                setIsLoading(false);
                 log('✅ Initialization complete (no neural network).');
             }, []);
 
@@ -139,11 +143,11 @@
             }, [chartData]);
 
             // --- ACTION EVALUATION LOGIC ---
-            const evaluateSubscriptionPrice = (userChangePercent, latestPriceChange, fiatAmount, reserveBalance, tokenPriceUSD, tokenAmount) => {
+            const evaluateSubscriptionPrice = (userChangePercent, latestPriceChange, fiatAmount, reserveBalance, tokenPriceUsd, tokenAmount) => {
                 // Convert BigInt to Number, handling decimals
                 const fiatAmountNum = Number(ethers.formatUnits(fiatAmount, 8));
                 const reserveBalanceNum = Number(ethers.formatUnits(reserveBalance, 18));
-                const tokenPriceUsdNum = Number(ethers.formatUnits(tokenPriceUSD, 8));
+                const tokenPriceUsdNum = Number(ethers.formatUnits(tokenPriceUsd, 8));
                 const tokenAmountNum = Number(ethers.formatUnits(tokenAmount, 18));
 
                 if (userChangePercent < 0.05 && latestPriceChange > 0.05) {
@@ -172,12 +176,13 @@
                 const sell10Amount = 0.1 * reserveBalance;
                 const fiatGained10 = sell10Amount * tokenPriceUsd;
                 const newTokenAmount10 = tokenAmount - sell10Amount;
-                actions[3] = newTokenAmount10 > 0 ? fiatGained10 / newTokenAmount10 : 0;
+                const newFiat10 = fiatAmount + fiatGained10;
+                actions[3] = newTokenAmount10 > 0 ? newFiat10 / newTokenAmount10 : 0;
 
                 // Action 4: Buy back tokens using 10% of the fiat reserve
                 const fiatToSpend = 0.1 * fiatAmount;
                 const tokensBought = tokenPriceUsd > 0 ? fiatToSpend / tokenPriceUsd : 0;
-                const newTokenAmountBuy = tokenAmount + tokensBought;
+                const newTokenAmountBuy = tokenAmount - tokensBought;
                 const newFiatBuy = fiatAmount - fiatToSpend;
                 actions[4] = (newTokenAmountBuy > 0 && newFiatBuy > 0) ? newFiatBuy / newTokenAmountBuy : 0;
 
@@ -231,6 +236,17 @@
                     const tokenPriceUSD = await subscription.tokenPriceUSD();
 
                     const userChangePercent = prevUsers > 0 ? ((updatedUsers - prevUsers) / prevUsers) * 100 : 0;
+                    // Commented out neural network prediction
+                    // const predictedAction = await getPredictedAction(
+                    //     updatedUsers,
+                    //     prevUsers,
+                    //     priceChange,
+                    //     prevPriceChange,
+                    //     fiatAmount.toString(),
+                    //     tokenAmount.toString(),
+                    //     reserveBalance.toString(),
+                    //     tokenPriceUSD.toString()
+                    // );
                     const predictedAction = evaluateSubscriptionPrice(
                         userChangePercent,
                         priceChange,
