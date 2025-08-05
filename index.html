@@ -176,6 +176,43 @@
                 return 0;
             };
 
+            // --- SESSION MANAGEMENT ---
+            const handleStartSession = async () => {
+                if (!window.ethereum) return log("❌ MetaMask is not installed.");
+                setIsLoading(true);
+                log("Starting simulation session...");
+                try {
+                    const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
+                    await web3Provider.send("eth_requestAccounts", []);
+                    setProvider(web3Provider);
+
+                    log("Creating temporary session wallet...");
+                    const newSessionWallet = ethers.Wallet.createRandom().connect(web3Provider);
+                    setSessionWallet(newSessionWallet);
+                    log(` ephemeral wallet created: ${newSessionWallet.address}`);
+                    log("Please fund this wallet with a small amount of SepoliaETH for gas.");
+
+                    log("Authorizing session wallet on both contracts. Please confirm transactions in MetaMask...");
+                    const ownerSigner = web3Provider.getSigner();
+                    const contractAI = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, ownerSigner);
+                    const contractControl = new ethers.Contract(SUBSCRIPTION_NO_ACTION_ADDRESS, SUBSCRIPTION_ABI, ownerSigner);
+
+                    const tx1 = await contractAI.authorizeSessionSigner(newSessionWallet.address);
+                    await tx1.wait();
+                    log("AI contract authorized session wallet.");
+
+                    const tx2 = await contractControl.authorizeSessionSigner(newSessionWallet.address);
+                    await tx2.wait();
+                    log("Control contract authorized session wallet.");
+                    log("Session is active! You can now run the automated simulation.");
+
+                } catch (e) {
+                    log(`❌ Session start failed: ${e.message}`);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
             // --- CORE SIMULATION LOGIC ---
             const runSingleScenario = async (provider, scenario, contractAddress, useAiAction) => {
                 const logPrefix = useAiAction ? "[AI]" : "[Control]";
@@ -213,7 +250,7 @@
                 }
 
                 // Execute the entire scenario in one transaction
-                const tx = await subscription.runScenario(initialPrice, newFiatAmount, userChange, predictedAction);
+                const tx = await subscription.runScenario(initialPrice, newFiatAmount, userChange, predictedAction, { gasLimit: 500000 });
                 await tx.wait();
                 log(`${logPrefix} Scenario executed on-chain.`);
 
@@ -223,7 +260,7 @@
             };
 
             const handleRunAll = async () => {
-                if (!window.ethereum) return log("❌ MetaMask is not installed.");
+                if (!sessionWallet) return log("Please start a session first.");
                 setIsLoading(true);
                 setChartData(null);
                 log("--- STARTING PARALLEL SIMULATION ---");
