@@ -117,7 +117,6 @@
             // --- INITIALIZATION ---
             useEffect(() => {
                 setIsLoading(false); // No model loading needed
-                log('✅ Initialization complete (no neural network).');
             }, []);
 
             // --- CHART RENDERING ---
@@ -256,11 +255,11 @@
                     );
 
                     log(`${logPrefix} Predicted Action: ${ACTION_MAP[predictedAction]}`);
-
-                    tx = await subscription.applyCorrectiveAction(predictedAction);
-                    await tx.wait();
-                    log(`${logPrefix} Action applied on-chain.`);
                 }
+
+                tx = await subscription.runScenario(initialPrice, newFiatAmount, userChange, predictedAction);
+                await tx.wait();
+                log(`${logPrefix} Action applied on-chain.`);
 
                 const finalPrice = await subscription.tokenPriceUSD();
                 log(`${logPrefix} Final price for this step: $${formatUSD(finalPrice)}`);
@@ -285,16 +284,13 @@
                     for (const scenario of scenarios) {
                         log(`\n--- SCENARIO: ${scenario.name} ---`);
 
-                        // Run on AI contract
                         const priceAi = await runSingleScenario(provider, scenario, SUBSCRIPTION_ADDRESS, true);
                         pricesWithAi.push(priceAi);
 
-                        // Run on Control contract
                         const priceNoAi = await runSingleScenario(provider, scenario, SUBSCRIPTION_NO_ACTION_ADDRESS, false);
                         pricesWithoutAi.push(priceNoAi);
                     }
 
-                    // Update chart with final results
                     setChartData({
                         labels: scenarios.map(s => s.name),
                         datasets: [
@@ -318,7 +314,6 @@
                         ]
                     });
                     log("\n✅ Full simulation complete. Chart updated.");
-
                 } catch (error) {
                     log(`❌ An error occurred: ${error.message}`);
                     console.error(error);
