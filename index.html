@@ -199,7 +199,7 @@
                 if (useAiAction) {
                     const userChangePercent = (userChange / currentUsers.toNumber()) * 100;
                     predictedAction = evaluateSubscriptionPrice(userChangePercent, scenario.priceChange * 100, newFiatAmount, reserveBalance, targetPriceUSD, currentTokenAmount);
-                    log(`${logPrefix} 🧠 Heuristic Predicted Action: ${ACTION_MAP[predictedAction]}`);
+                    log(`${logPrefix} Predicted Action: ${ACTION_MAP[predictedAction]}`);
                     
                     // If the action is a buy-back, we must approve the contract to spend tokens first.
                     if (predictedAction === 4) {
