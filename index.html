@@ -102,8 +102,7 @@
                 "function lastTokenPrice() view returns (uint256)", "function activeUsers() view returns (uint256)",
                 "function lastActiveUsers() view returns (uint256)", "function fiatAmount() view returns (uint256)",
                 "function tokenAmount() view returns (uint256)", "function reserveBalance() view returns (uint256)",
-                "function setFiatAmount(uint256 _fiatAmount) external", "function setLastTokenPrice(uint256 _lastTokenPrice) external",
-                "function simulateUserDrop(uint256 users) external", "function simulateUserIncrease(uint256 users) external"
+                "function runScenario(uint256 _lastPrice, uint256 _fiatAmount, int256 _userChange, uint256 _action) external payable"
             ];
 
             const TOKEN_ABI = ["function approve(address spender, uint256 amount) external returns (bool)"];
@@ -209,57 +208,36 @@
                 log(`${logPrefix} initialPrice: $${formatUSD(initialPrice)}, type: ${typeof initialPrice}`);
                 log(`${logPrefix} currentTokenAmount: ${formatPLT(currentTokenAmount)} PLT, type: ${typeof currentTokenAmount}`);
 
-                // Convert priceChange to BigNumber with 4 decimal precision (scale by 10000)
                 const priceChangeScaled = ethers.BigNumber.from(Math.round(scenario.priceChange * 10000));
                 const oneHundred = ethers.BigNumber.from(10000);
                 const targetPriceUSD = initialPrice.mul(oneHundred.add(priceChangeScaled)).div(oneHundred);
-
-                log(`${logPrefix} targetPriceUSD: $${formatUSD(targetPriceUSD)}, type: ${typeof targetPriceUSD}`);
-
                 const newFiatAmount = targetPriceUSD.mul(currentTokenAmount).div(ethers.BigNumber.from(10).pow(18));
 
-                let tx = await subscription.setLastTokenPrice(initialPrice);
-                await tx.wait();
-                tx = await subscription.setFiatAmount(newFiatAmount);
-                await tx.wait();
+                log(`${logPrefix} targetPriceUSD: $${formatUSD(targetPriceUSD)}, type: ${typeof targetPriceUSD}`);
 
                 const currentUsers = await subscription.activeUsers();
                 const targetUsers = Math.max(10, Math.round(currentUsers.toNumber() * (1 + scenario.userChange)));
                 const userChange = targetUsers - currentUsers.toNumber();
-
-                if (userChange < 0) {
-                    tx = await subscription.simulateUserDrop(Math.abs(userChange));
-                } else if (userChange > 0) {
-                    tx = await subscription.simulateUserIncrease(userChange);
-                }
-                await tx.wait();
+                let predictedAction = 0;
 
                 if (useAiAction) {
-                    const updatedUsers = (await subscription.activeUsers()).toNumber();
-                    const prevUsers = (await subscription.lastActiveUsers()).toNumber();
+                    const updatedUsers = targetUsers;
+                    const prevUsers = currentUsers.toNumber();
                     const priceChange = scenario.priceChange;
                     const prevPriceChange = 0;
-                    const fiatAmount = await subscription.fiatAmount();
-                    const tokenAmount = await subscription.tokenAmount();
+                    const fiatAmount = newFiatAmount;
+                    const tokenAmount = currentTokenAmount;
                     const reserveBalance = await subscription.reserveBalance();
-                    const tokenPriceUSD = await subscription.tokenPriceUSD();
+                    const tokenPriceUSD = targetPriceUSD;
 
                     const userChangePercent = prevUsers > 0 ? ((updatedUsers - prevUsers) / prevUsers) * 100 : 0;
-                    const predictedAction = evaluateSubscriptionPrice(
-                        userChangePercent,
-                        priceChange,
-                        fiatAmount,
-                        reserveBalance,
-                        tokenPriceUSD,
-                        tokenAmount
-                    );
-
+                    predictedAction = evaluateSubscriptionPrice(userChangePercent, priceChange, fiatAmount, reserveBalance, tokenPriceUSD, tokenAmount);
                     log(`${logPrefix} Predicted Action: ${ACTION_MAP[predictedAction]}`);
                 }
 
-                tx = await subscription.runScenario(initialPrice, newFiatAmount, userChange, predictedAction);
+                const tx = await subscription.runScenario(initialPrice, newFiatAmount, userChange, predictedAction);
                 await tx.wait();
-                log(`${logPrefix} Action applied on-chain.`);
+                log(`${logPrefix} Scenario executed on-chain.`);
 
                 const finalPrice = await subscription.tokenPriceUSD();
                 log(`${logPrefix} Final price for this step: $${formatUSD(finalPrice)}`);
