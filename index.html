@@ -17,9 +17,8 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
     <style>
-        /* Custom styles for a polished look */
         body {
-            background-color: #f8fafc; /* A light gray background */
+            background-color: #f8fafc; 
             font-family: 'Inter', sans-serif;
         }
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -96,6 +95,8 @@
                 "function tokenAmount() view returns (uint256)", "function reserveBalance() view returns (uint256)",
                 "function runScenario(uint256 _lastPrice, uint256 _fiatAmount, int256 _userChange, uint256 _action) external"
             ];
+            
+            const TOKEN_ABI = ["function approve(address spender, uint256 amount) external returns (bool)"];
 
             // --- LOGGING UTILITY ---
             const log = (message) => {
@@ -130,7 +131,7 @@
                 }
             }, [chartData]);
 
-            // --- ACTION EVALUATION LOGIC ---
+            // --- ACTION EVALUATION LOGIC (HEURISTIC MODEL) ---
             const evaluateMarketActions = (fiatAmount, reserveBalance, tokenPriceUsd, tokenAmount) => {
                 const actions = {};
                 
@@ -148,8 +149,16 @@
                 const newTokenAmountBuy = tokenAmount - tokensToBuy; 
                 actions[4] = (newTokenAmountBuy > 0 && newFiatBuy > 0) ? newFiatBuy / newTokenAmountBuy : 0;
                 
-                return Number(Object.keys(actions).reduce((maxKey, key) => 
-                    actions[key] > actions[maxKey] ? key : maxKey, Object.keys(actions)[0]));
+                // Find the action that results in the best new token price
+                let bestAction = 0;
+                let maxImpact = -Infinity;
+                for (const action in actions) {
+                    if (actions[action] > maxImpact) {
+                        maxImpact = actions[action];
+                        bestAction = action;
+                    }
+                }
+                return Number(bestAction);
             };
             
             const evaluateSubscriptionPrice = (userChangePercent, latestPriceChange, fiatAmount, reserveBalance, tokenPriceUSD, tokenAmount) => {
@@ -190,7 +199,17 @@
                 if (useAiAction) {
                     const userChangePercent = (userChange / currentUsers.toNumber()) * 100;
                     predictedAction = evaluateSubscriptionPrice(userChangePercent, scenario.priceChange * 100, newFiatAmount, reserveBalance, targetPriceUSD, currentTokenAmount);
-                    log(`${logPrefix} Predicted Action: ${ACTION_MAP[predictedAction]}`);
+                    log(`${logPrefix} 🧠 Heuristic Predicted Action: ${ACTION_MAP[predictedAction]}`);
+                    
+                    // If the action is a buy-back, we must approve the contract to spend tokens first.
+                    if (predictedAction === 4) {
+                        log(`${logPrefix} Approval required for Buy-Back. Please confirm in MetaMask.`);
+                        const tokenContract = new ethers.Contract(TOKEN_ADDRESS, TOKEN_ABI, signer);
+                        // Approve a large amount to avoid repeated approvals during the demo.
+                        const approveTx = await tokenContract.approve(contractAddress, ethers.constants.MaxUint256);
+                        await approveTx.wait();
+                        log(`${logPrefix} ✅ Approval successful.`);
+                    }
                 }
 
                 // Execute the entire scenario in one transaction
@@ -257,8 +276,8 @@
             return (
                 <div className="p-4 md:p-8 max-w-7xl mx-auto">
                     <header className="text-center mb-8">
-                        <h1 className="text-4xl font-bold text-gray-800">Heuristic-Based Tokenomics Engine</h1>
-                        <p className="text-lg text-gray-500 mt-2">Live A/B Test on the Sepolia Testnet</p>
+                        <h1 className="text-4xl font-bold text-gray-800">Smart contracts with NN correction action simulation</h1>
+                        <p className="text-lg text-gray-500 mt-2">Live Simulation on the Sepolia Testnet</p>
                     </header>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                         <div className="lg:col-span-1">
